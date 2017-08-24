@@ -34,7 +34,7 @@
 
 #define CS_ADXL2_PIN  8 /**< SPI CS Pin.*/
 #define CS_ADXL1_PIN  3
-#define CS_FRAM       7
+#define CS_FRAM       4
 
 #define MASTER_TWI_INST 0
 
@@ -51,13 +51,13 @@
 #define DEVICE_NAME                      "JohnCougarMellenc"
 #define APP_ADV_INTERVAL                 300                                        /**< The advertising interval 
 																							(in units of 0.625 ms. This value corresponds to 25 ms). */
-#define APP_ADV_TIMEOUT_IN_SECONDS       180                                        /**< The advertising timeout in units of seconds. */
+#define APP_ADV_TIMEOUT_IN_SECONDS       10                                        /**< The advertising timeout in units of seconds. */
 
 #define APP_TIMER_PRESCALER              0                                          /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE          4                                          /**< Size of timer operation queues. */
 
 #define MIN_CONN_INTERVAL                MSEC_TO_UNITS(16, UNIT_1_25_MS)           /**< Minimum acceptable connection interval (0.1 seconds). */
-#define MAX_CONN_INTERVAL                MSEC_TO_UNITS(160, UNIT_1_25_MS)           /**< Maximum acceptable connection interval (0.2 second). */
+#define MAX_CONN_INTERVAL                MSEC_TO_UNITS(40, UNIT_1_25_MS)           /**< Maximum acceptable connection interval (0.2 second). */
 #define SLAVE_LATENCY                    0                                          /**< Slave latency. */
 #define CONN_SUP_TIMEOUT                 MSEC_TO_UNITS(4000, UNIT_10_MS)            /**< Connection supervisory timeout (4 seconds). */
 
@@ -83,7 +83,7 @@
 
 static dm_application_instance_t        m_app_handle;                               /**< Application identifier allocated by device manager */
 
-static uint16_t                          m_conn_handle = BLE_CONN_HANDLE_INVALID;   /**< Handle of the current connection. */
+static uint16_t                         m_conn_handle = BLE_CONN_HANDLE_INVALID;   /**< Handle of the current connection. */
 double vector;
 /****************************
 *
@@ -516,7 +516,7 @@ void int_fxn(){
 		lowPowerCxnParams.conn_sup_timeout = 400;
 		lowPowerCxnParams.slave_latency = 1;
 		//ble_conn_params_change_conn_params(&lowPowerCxnParams);
-		nrf_drv_gpiote_out_set(15); //green on 
+		nrf_drv_gpiote_out_set(15); //green off 
 		//nrf_drv_gpiote_out_set(20);
 		SEGGER_RTT_WriteString(0, "no motion\n");
 		boschIntCheck[0] = 0x3E;
@@ -532,10 +532,20 @@ void int_fxn(){
 		gap_conn_params.slave_latency     = SLAVE_LATENCY;
 		gap_conn_params.conn_sup_timeout  = CONN_SUP_TIMEOUT;
 		//ble_conn_params_change_conn_params(&gap_conn_params);
-		nrf_drv_gpiote_out_clear(15);
+		nrf_drv_gpiote_out_clear(15); //green on
 		SEGGER_RTT_WriteString(0,"any motion\n");
 		boschIntCheck[0] = 0x3E;
 		boschIntCheck[1] = 0x00;
+		
+		
+		
+		
+		//*********************************** advertising start
+		
+		//ble_advertising_start(BLE_ADV_MODE_FAST);
+		
+		
+		
 		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);
 	}
 	//nrf_drv_gpiote_out_set(15);
@@ -1456,7 +1466,7 @@ int main(void)
 	SEGGER_RTT_printf(0,"12 = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x16;
-	txBuff[1] = 0x0B; // no motion 10 seconds will trigger interrupt
+	txBuff[1] = 0x7B; // no motion 10 seconds will trigger interrupt
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
