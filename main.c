@@ -828,7 +828,7 @@ int main(void)
 	
 	uint8_t FRAMtx[1] = {0x06};  								//write enable
 	uint8_t* addrFRAMtx = &FRAMtx[0];
-	nrf_drv_gpiote_out_clear(CS_FRAM);
+	nrf_drv_gpiote_out_clear(CS_FRAM_EVAL);
 	nrf_drv_spi_transfer(&spi, addrFRAMtx,1, NULL,0);
 	while (!spi_xfer_done)
     {
@@ -839,7 +839,7 @@ int main(void)
 	
 	uint8_t FRAMtx2[2] = {0x01,0x42};
 	uint8_t* addrFRAMtx2 = &FRAMtx2[0];
-	nrf_drv_gpiote_out_clear(CS_FRAM);
+	nrf_drv_gpiote_out_clear(CS_FRAM_EVAL);
 	nrf_drv_spi_transfer(&spi,addrFRAMtx2,2,NULL,0);
 	while (!spi_xfer_done)
     {
@@ -848,7 +848,7 @@ int main(void)
 	nrf_drv_gpiote_out_set(CS_FRAM);
 	spi_xfer_done = false;
 	
-	nrf_drv_gpiote_out_clear(CS_FRAM);						 //write enable again
+	nrf_drv_gpiote_out_clear(CS_FRAM_EVAL);						 //write enable again
 	nrf_drv_spi_transfer(&spi, addrFRAMtx,1, NULL,0);
 	while (!spi_xfer_done)
     {
@@ -861,13 +861,13 @@ int main(void)
 	uint8_t* addrFRAMtx3 = &FRAMtx3[0];
 	uint8_t FRAMrx3[2];
 	uint8_t* addrFRAMrx3 = &FRAMrx3[0];
-	nrf_drv_gpiote_out_clear(CS_FRAM);					 //read status register
+	nrf_drv_gpiote_out_clear(CS_FRAM_EVAL);					 //read status register
 	nrf_drv_spi_transfer(&spi, addrFRAMtx3,1,addrFRAMrx3,2);
 	while (!spi_xfer_done)
     {
        __WFE();
     }
-	nrf_drv_gpiote_out_set(CS_FRAM);
+	nrf_drv_gpiote_out_set(CS_FRAM_EVAL);
 	spi_xfer_done = false;
 	
 	if (FRAMrx3[1] == 66){
