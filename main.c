@@ -33,8 +33,11 @@
 #define TWI_SDA_M                25   //!< Master SDA pin
 
 #define CS_ADXL2_PIN  8 /**< SPI CS Pin.*/
-#define CS_ADXL1_PIN  3
+#define CS_ADXL1_PIN  17
+#define CS_ADXL1_PIN_EVAL 3
+#define CS_ADXL2_PIN_EVAL 8
 #define CS_FRAM       4
+#define CS_FRAM_EVAL  7
 
 #define MASTER_TWI_INST 0
 
@@ -51,7 +54,7 @@
 #define DEVICE_NAME                      "JohnCougarMellenc"
 #define APP_ADV_INTERVAL                 300                                        /**< The advertising interval 
 																							(in units of 0.625 ms. This value corresponds to 25 ms). */
-#define APP_ADV_TIMEOUT_IN_SECONDS       10                                        /**< The advertising timeout in units of seconds. */
+#define APP_ADV_TIMEOUT_IN_SECONDS       60000                                        /**< The advertising timeout in units of seconds. */
 
 #define APP_TIMER_PRESCALER              0                                          /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE          4                                          /**< Size of timer operation queues. */
@@ -85,6 +88,8 @@ static dm_application_instance_t        m_app_handle;                           
 
 static uint16_t                         m_conn_handle = BLE_CONN_HANDLE_INVALID;   /**< Handle of the current connection. */
 double vector;
+uint8_t mainADXLid = 0;
+uint8_t antADXLid = 0;
 /****************************
 *
 * additional global variables	
@@ -101,7 +106,6 @@ static const nrf_drv_spi_t spi = NRF_DRV_SPI_INSTANCE(SPI_INSTANCE);            
 static volatile bool spi_xfer_done; 
 static const nrf_drv_twi_t m_twi_master = NRF_DRV_TWI_INSTANCE(MASTER_TWI_INST);
 
-// why is this global? 
 // spi read from adxl buffers
 uint8_t buffTx[1] = {0xF2}; // reading static values from the sensor NOT acc values
 uint8_t* addrBuffTx = &buffTx[0];
@@ -115,6 +119,12 @@ uint8_t greatestSample[20];
 int isInt = 0;
 static uint8_t ADXLdataBuffer[196] = {0};
 static uint8_t ADXLdataBuffer2[196] = {0};
+nrf_drv_gpiote_pin_t main_bosch_address_pin = 2;
+nrf_drv_gpiote_pin_t green_led = 15;
+nrf_drv_gpiote_pin_t yellow_led = 20;
+nrf_drv_gpiote_pin_t red_led = 19;
+nrf_drv_gpiote_pin_t boschIntEval = 6;
+nrf_drv_gpiote_pin_t boschInt = 3;
 // spi configuration structure
 nrf_drv_spi_config_t spi_config = {
 	12, 					  	//sck
@@ -127,15 +137,8 @@ nrf_drv_spi_config_t spi_config = {
 	NRF_DRV_SPI_MODE_3,
 	NRF_DRV_SPI_BIT_ORDER_MSB_FIRST, 
 };
-int16_t gyroXprevious = 0;
-int16_t gyroYprevious = 0;
-int16_t gyroZprevious = 0;
 
-int16_t gyroXaprevious = 0;
-int16_t gyroYaprevious = 0;
-int16_t gyroZaprevious = 0;
-int16_t gyro[12] = {0};
-int greatestGyroDiff = 0;
+
 bool blockUpdate = false;
 
 // service structure for our application
@@ -166,7 +169,6 @@ void assert_nrf_callback(uint16_t line_num, const uint8_t * p_file_name)
     app_error_handler(DEAD_BEEF, line_num, p_file_name);
 }
 
-
 /****************************
 *
 *   spi event handler   
@@ -180,34 +182,6 @@ void spi_event_handler(nrf_drv_spi_evt_t const * p_event)
 {
 	spi_xfer_done = true;
 }
-
-/**************************
-*
-*
-*    calculate difference
-*
-*
-***************************/
-int calculateDifference(){
-	int maxDifference = 0; 
-	for (int i = 4; i <196; i+=2){
-		int16_t ADXLdata1 = 0;
-		ADXLdata1 = ADXLdataBuffer[i+1]  | ADXLdata1;
-		ADXLdata1 = (ADXLdata1 << 8) | ADXLdataBuffer[i];
-		
-		int16_t ADXLdata2 = 0;
-		ADXLdata2 = ADXLdataBuffer2[i+1] | ADXLdata2;
-		ADXLdata2 = (ADXLdata2 << 8) | ADXLdataBuffer2[i];
-		
-		
-		int currentDifference = (int)(ADXLdata2 - ADXLdata1);
-		
-		if( abs(currentDifference)> abs(maxDifference)){
-			maxDifference = currentDifference;
-		}
-	}
-	return maxDifference;	
-}	
 /****************************
 *
 *  bosch i2c gyroscope read
@@ -216,397 +190,58 @@ int calculateDifference(){
 uint8_t* readGyro(){
 	if(!blockUpdate){
 		uint8_t i2cTx[1] = {0x1A};
-		//uint8_t i2cTx[1] = {0x00};
 		uint8_t* addrTx = &i2cTx[0];
 		uint8_t* addrRx = &buffRx[7];
-		//uint8_t* addrRxAnt = &buffRx[13];
-		//nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,true); //i2c read to address located in i2cTx[0]
-		//nrf_drv_twi_rx(&m_twi_master,0x28,addrRx,6);
 		nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,true); //i2c read to address located in i2cTx[0]
 		nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,6);
-		SEGGER_RTT_printf(0, "%d\t",buffRx[7]);
+		/*SEGGER_RTT_printf(0, "%d\t",buffRx[7]);
 		SEGGER_RTT_printf(0, "%d\t",buffRx[8]);
 		SEGGER_RTT_printf(0, "%d\t",buffRx[9]);
 		SEGGER_RTT_printf(0, "%d\t",buffRx[10]);
-		SEGGER_RTT_printf(0, "%d\n",buffRx[11]);
+		SEGGER_RTT_printf(0, "%d\n",buffRx[11]);*/
 		uint8_t* addrRxGrav = &buffRx[13];
 		i2cTx[0] = 0x08;
 		nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,true); //i2c read to address located in i2cTx[0]
 		nrf_drv_twi_rx(&m_twi_master,0x29,addrRxGrav,6);
 	}	
-	//greatestGyroDiff = 0;
-	/*for(int i = 0; i < 12; i+=2){
-		gyro[i] = 0;
-	}	
-	for(int i = 7; i < 19; i+=2){
-		gyro[i-7] = buffRx[i+1] | gyro[i-7];
-		gyro[i-7] = (gyro[i-7] << 8) | buffRx[i];
-	}
-    for (int i = 0; i < 12; i+=2){
-	 	int currentDiff = gyro[i+1] - gyro[i];
-		if (abs(currentDiff) > abs(greatestGyroDiff)){
-			greatestGyroDiff = currentDiff;
-		}
-	}
-	for (int i = 0; i < 12; i+=2){
-		gyro[i+1] = gyro[i];
-	}
-*/
 	return &buffRx[7];
 }	
-/****************************
-*
-* ADXL SPI read 32 sample buffer 
-* 	ADXLdataBuffer has 196 elements because:
-*		((6B/sample) * 32 samples + 1B read command + 3B address)												 
-*	k is the byte number (1-6) of one sample 
-*   j is the sample number (1-32) of the fifo buffer
-*		so when j = 0  and k = 1 we start at array index 4
-*			this leaves indexes 0-3 open for write command and address value
-*			because this array is going straight into the FRAM
-*
-****************************/
-uint8_t * readADXLbuffer(){
-	uint8_t *ADXLdataAddr = &ADXLdataBuffer[0];
-	uint8_t *ADXLdata1 = &ADXLdataBuffer[4];
-	ADXLdataBuffer[0] = 0x02;
-	uint8_t FRAMreset = checkFRAMflag();
-	if (FRAMreset == 1){
-		FRAMregister = 0;
-		FRAMfull = 0;
-		SEGGER_RTT_WriteString(0, "FRAM rewrite in progress...\n");
-	}
-	if( !FRAMfull)
-	{
-		ADXLdataBuffer[3] = (uint8_t) FRAMregister;
-		ADXLdataBuffer[2] = (uint8_t) (FRAMregister >> 8);
-		ADXLdataBuffer[1] = (uint8_t) (FRAMregister >> 16);
-	}
-	greatestVal = 0;
-	for (int j = 0; j<32; j++)
-	{
-		nrf_drv_gpiote_out_clear(CS_ADXL1_PIN);
-		nrf_drv_spi_transfer(&spi, addrBuffTx , 7, addrBuffRx, 7);
-		while (!spi_xfer_done)
-		{
-			__WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_ADXL1_PIN);
-		spi_xfer_done = false;
-		for (int k = 1; k < 7; k++)
-		{
-			ADXLdataBuffer[j*6+k+3] = buffRx[k];
-			
-			//SEGGER_RTT_printf(0, "%d\n", buffRx[k]);
-		}
-		double currVal[12];
-		for (int k = 1; k < 7; k+=2){
-			int16_t currentVal = 0;
-			currentVal = buffRx[k+1] | currentVal;
-			currentVal = (currentVal << 8) | buffRx[k];
-			currVal[k] = (double) currentVal;
-			currVal[k] = currVal[k] * 0.049;
 
-			/*if (currentVal > greatestVal){
-				greatestVal = currentVal;
-				for (int k = 1; k < 7; k++){
-					greatestSample[k-1] = buffRx[k];
-				}
-			} */ 
-		}
-		vector = sqrt((currVal[1]*currVal[1])+(currVal[3]*currVal[3])+(currVal[5]*currVal[5]));
-		if (vector > greatestVal){
-			greatestVal = vector;
-		}
-	}	
-	return ADXLdata1;
-}
-
-uint8_t * readADXLbuffer2(){
 	
-	uint8_t *ADXLdataAddr2 = &ADXLdataBuffer2[0];
-	uint8_t *ADXLdata2 = &ADXLdataBuffer2[4];
-	ADXLdataBuffer2[0] = 0x02;
-	uint8_t FRAMreset = checkFRAMflag();
-	if (FRAMreset == 1){
-		FRAMregister = 0;
-		FRAMfull = 0;
-		SEGGER_RTT_WriteString(0, "FRAM rewrite in progress...\n");
-	}
-	if( !FRAMfull)
-	{
-		ADXLdataBuffer2[3] = (uint8_t) FRAMregister;
-		ADXLdataBuffer2[2] = (uint8_t) (FRAMregister >> 8);
-		ADXLdataBuffer2[1] = (uint8_t) (FRAMregister >> 16);
-	}
-	greatestVal2 = 0;
-	for (int j = 0; j<32; j++)
-	{
-		nrf_drv_gpiote_out_clear(CS_ADXL2_PIN);
-		nrf_drv_spi_transfer(&spi, addrBuffTx , 7, addrBuffRx, 7);
-		while (!spi_xfer_done)
-		{
-			__WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_ADXL2_PIN);
-		spi_xfer_done = false;
-		for (int k = 1; k < 7; k++)
-		{
-			ADXLdataBuffer2[j*6+k+3] = buffRx[k];
-			//SEGGER_RTT_printf(0, "%d\n", buffRx[k]);
-		}
-		double currVal[12];
-		for (int k = 1; k < 7; k+=2){
-			int16_t currentVal = 0;
-			currentVal = buffRx[k+1] | currentVal;
-			currentVal = (currentVal << 8) | buffRx[k];
-			currVal[k] = (double) currentVal;
-			currVal[k] = currVal[k] * 0.049;
-
-			/*if (currentVal > greatestVal){
-				greatestVal = currentVal;
-				for (int k = 1; k < 7; k++){
-					greatestSample[k-1] = buffRx[k];
-				}
-			} */ 
-		}
-		vector = sqrt((currVal[1]*currVal[1])+(currVal[3]*currVal[3])+(currVal[5]*currVal[5]));
-		if (vector > greatestVal2){
-			greatestVal2 = vector;
-		}
-	}	
-	readGyro();
-	//our_termperature_characteristic_update(&m_our_service, &greatestSample[0]);
-	return ADXLdata2;
-}		
-/****************************
-*
-* FRAM write 
-*	ADXLbuff goes to FRAM	 
-*
-****************************/
-void writeToFRAM(uint8_t * buffer){
-
-	if(!FRAMfull)
-	{ 
-		nrf_drv_gpiote_out_clear(CS_FRAM);
-		nrf_drv_spi_transfer(&spi,buffer,192,NULL,0);
-		while (!spi_xfer_done)
-		{
-		   __WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_FRAM);
-		spi_xfer_done = false;
-	}
-}
-
-void intSourceRead(){
-		uint8_t transmitBuff[1] = {0xB0};
-		uint8_t* addrTxSPI = &transmitBuff[0];
-		uint8_t receiveBuff[2];
-		uint8_t* addrRxSPI = &receiveBuff[0];
-		nrf_drv_gpiote_out_clear(CS_ADXL1_PIN);
-		nrf_drv_spi_transfer(&spi, addrTxSPI , 1, addrRxSPI, 2);
-		while (!spi_xfer_done)
-		{
-		   __WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_ADXL1_PIN);
-		spi_xfer_done = false;
-		//SEGGER_RTT_printf(0, "%d\n", receiveBuff[1]);
-}
-/****************************
-*
-* reenable FRAM writes 	
-*
-****************************/		
-void reenableWriteToFRAM(){
-	if(!FRAMfull)
-    {	
-		uint8_t FRAMtx[1] = {0x06};  								//write enable
-		uint8_t* addrFRAMtx = &FRAMtx[0];
-		nrf_drv_gpiote_out_clear(CS_FRAM);
-		nrf_drv_spi_transfer(&spi, addrFRAMtx,1, NULL,0);
-		while (!spi_xfer_done)
-		{
-		   __WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_FRAM);
-		spi_xfer_done = false;
-		
-		uint8_t FRAMtx2[2] = {0x01,0x42};
-		uint8_t* addrFRAMtx2 = &FRAMtx2[0];
-		nrf_drv_gpiote_out_clear(CS_FRAM);
-		nrf_drv_spi_transfer(&spi,addrFRAMtx2,2,NULL,0);
-		while (!spi_xfer_done)
-		{
-		   __WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_FRAM);
-		spi_xfer_done = false;
-		
-		nrf_drv_gpiote_out_clear(CS_FRAM);						 //write enable again
-		nrf_drv_spi_transfer(&spi, addrFRAMtx,1, NULL,0);
-		while (!spi_xfer_done)
-		{
-		   __WFE();
-		}
-		nrf_drv_gpiote_out_set(CS_FRAM);
-		spi_xfer_done = false;
-	}	
-}
-
-/****************************
-*
-* read back data on FRAM 	
-*
-****************************/	
-uint8_t* readDataFromFRAM(){
-
-	uint8_t FRAMtx5[4];
-	FRAMtx5[0] = 0x03;
-	FRAMtx5[3] = (uint8_t) FRAMreadRegister;
-	FRAMtx5[2] = (uint8_t) (FRAMreadRegister >> 8);
-	FRAMtx5[1] = (uint8_t) (FRAMreadRegister >> 16);
-	uint8_t* addrFRAMtx5 = &FRAMtx5[0];
-	static uint8_t FRAMrx5[196];
-	uint8_t* addrFRAMrx5 = &FRAMrx5[0];
-	nrf_drv_gpiote_out_clear(CS_FRAM);
-	nrf_drv_spi_transfer(&spi,addrFRAMtx5,4,addrFRAMrx5,196);
-	while (!spi_xfer_done)
-	{
-	   __WFE();
-	}
-	nrf_drv_gpiote_out_set(CS_FRAM);
-	spi_xfer_done = false;
-	for (int i = 4; i<196; i+=6)
-	{
-		// nrf_drv_uart_xfer_evt_t(uint8_t* p_data, uint8_t numofbytes)
-		
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i]);
-		//nrf_delay_ms(1);
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i+1]);
-		//nrf_delay_ms(1);
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i+2]);
-		//nrf_delay_ms(1);
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i+3]);
-		//nrf_delay_ms(1);
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i+4]);
-		//nrf_delay_ms(1);
-		SEGGER_RTT_printf(0, "%d\n", FRAMrx5[i+5]);
-		nrf_delay_ms(1);
-	}
-	//FRAMreadRegister += 192;
-	return addrFRAMrx5;
-
-}
 void int_fxn(){
 
 	uint8_t boschIntCheck[2];
 	boschIntCheck[0] = 0x37;
-	//boschIntCheck[1] = 
 	nrf_drv_twi_tx(&m_twi_master,0x29,&boschIntCheck[0],1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,&boschIntCheck[1],1);
-	SEGGER_RTT_printf(0,"%d\n",boschIntCheck[1]);
+	SEGGER_RTT_printf(0,"any or no motion = %d\n",boschIntCheck[1]);
+	uint8_t boschIntReset[2] = {0x3F,0x40};
+	nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntReset[0],2,false);	
 	if(boschIntCheck[1] >= 128){
 		blockUpdate = true;
-		ble_gap_conn_params_t lowPowerCxnParams;
-		lowPowerCxnParams.min_conn_interval = 1600;
-		lowPowerCxnParams.max_conn_interval = 1600;
-		lowPowerCxnParams.conn_sup_timeout = 400;
-		lowPowerCxnParams.slave_latency = 1;
-		//ble_conn_params_change_conn_params(&lowPowerCxnParams);
 		nrf_drv_gpiote_out_set(15); //green off 
-		//nrf_drv_gpiote_out_set(20);
 		SEGGER_RTT_WriteString(0, "no motion\n");
 		boschIntCheck[0] = 0x3E;
 		boschIntCheck[1] = 0x01;
 		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);
+		//nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],1,false);
+		//nrf_drv_twi_rx(&m_twi_master, 0x29, &boschIntCheck[0],1);
+		SEGGER_RTT_printf(0,"should be 01 %d\n",boschIntCheck[1]);
 	}
 	else if(boschIntCheck[1] >= 64 && boschIntCheck[1] < 128){
-		//nrf_drv_gpiote_out_clear(20); //yellow on
 		blockUpdate = false;
-		ble_gap_conn_params_t   gap_conn_params;
-		gap_conn_params.min_conn_interval = MIN_CONN_INTERVAL;
-		gap_conn_params.max_conn_interval = MAX_CONN_INTERVAL;
-		gap_conn_params.slave_latency     = SLAVE_LATENCY;
-		gap_conn_params.conn_sup_timeout  = CONN_SUP_TIMEOUT;
-		//ble_conn_params_change_conn_params(&gap_conn_params);
 		nrf_drv_gpiote_out_clear(15); //green on
 		SEGGER_RTT_WriteString(0,"any motion\n");
 		boschIntCheck[0] = 0x3E;
 		boschIntCheck[1] = 0x00;
-		
-		
-		
-		
-		//*********************************** advertising start
-		
-		//ble_advertising_start(BLE_ADV_MODE_FAST);
-		
-		
-		
 		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);
+		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],1,false);
+		nrf_drv_twi_rx(&m_twi_master, 0x29, &boschIntCheck[0],1);
+		SEGGER_RTT_printf(0,"should be 00 %d\n",boschIntCheck[0]);
 	}
-	//nrf_drv_gpiote_out_set(15);
-	//nrf_drv_gpiote_out_clear(20);
 	/*boschIntCheck[0] = 0x3F;
 	boschIntCheck[1] = 0x40;
-	nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);*/
-	boschIntCheck[0] = 0x3F;
-	boschIntCheck[1] = 0x40;
-	nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);
-	
-	/*isInt++;
-	intSourceRead();
-	if(isInt == 1){	
-		//SEGGER_RTT_WriteString(0, "interrupted????\n");
-		
-		
-		uint8_t* addrADXLBuff = readADXLbuffer();
-		uint8_t* addrADXLBuff2 = readADXLbuffer2();
-		writeToFRAM(addrADXLBuff);*/
-		/****************************
-		*
-		* increment FRAMregister
-		*    if the FRAM is full set the flag so we no longer write to FRAM or increment the register
-		*
-		****************************/
-		/*if(!FRAMfull)
-		{
-			FRAMregister += 192;
-		}	
-		if(FRAMregister > 130928)
-		{
-			FRAMfull = 1;
-			SEGGER_RTT_WriteString(0, "FRAM full\n");
-			FRAMregister = 0;
-		
-		}
-		writeToFRAM(addrADXLBuff2);*/
-		/****************************
-		*
-		* increment FRAMregister
-		*    if the FRAM is full set the flag so we no longer write to FRAM or increment the register
-		*
-		****************************/
-		/*if(!FRAMfull)
-		{
-			FRAMregister += 192;
-		}	
-		if(FRAMregister > 130928)
-		{
-			FRAMfull = 1;
-			SEGGER_RTT_WriteString(0, "FRAM full\n");
-			FRAMregister = 0;
-		
-		}
-		isInt = 0;
-		reenableWriteToFRAM();*/
-		//readDataFromFRAM();
-		
-		
-	//}
+	nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);	*/
 }
 /****************************
 *
@@ -621,59 +256,12 @@ void int_fxn(){
 ****************************/
 static void timer_timeout_handler(void * p_context)
 {
-	uint8_t* gyroData = readGyro();
-   /* uint8_t diff[32];
-	for (int i = 0; i < 12; i++){
-		diff[i+8] = *(gyroData+i);
-	}	
-	uint8_t FRAMreadout = readFRAMcheck();
-	if (FRAMreadout){
-		registerAtStop = FRAMregister;
-		FRAMregister = 0;
-		app_timer_stop(m_our_char_timer_id);
-		app_timer_start(data_dump_id, DATA_DUMP_TIMER_INTERVAL, NULL);
-	}
-	uint8_t* addrADXLBuff = readADXLbuffer();
-	uint8_t* addrADXLBuff2 = readADXLbuffer2();
-	int difference = calculateDifference();
-	
-	greatestVal = greatestVal/0.049;
-	int16_t accel1 = (int16_t)greatestVal;
-	diff[4] = accel1 >>8;
-	diff[5] = accel1;
-	greatestVal2 = greatestVal2/0.049;
-	int16_t accel2 = (int16_t) greatestVal2;
-	diff[6] = accel2 >>8;
-	diff[7] = accel2;
-	diff[1] = difference >> 8;
-	diff[0] = difference;
-	diff[3] = greatestGyroDiff >> 8;
-	diff[2] = greatestGyroDiff;
-	//diff[31] = 8;
-	*/
 	if(!blockUpdate){
+		uint8_t* gyroData = readGyro();
 		our_termperature_characteristic_update(&m_our_service, gyroData);
 	}
 }
 
-/****************************
-*
-* FRAM write 
-*	ADXLbuff goes to FRAM	 
-*
-****************************/
-void data_dump_timeout(void * p_context){
-	if (FRAMreadRegister < registerAtStop){
-		readDataFromFRAM();
-	}
-	else{
-		//resetReadFRAMflag();
-		app_timer_stop(data_dump_id);
-		//app_timer_start(m_our_char_timer_id, OUR_CHAR_TIMER_INTERVAL, NULL);
-		SEGGER_RTT_WriteString(0, "data end...reset device to record again\n");
-	}
-	FRAMregister += 192;
-}
 
 /**@brief Function for the Timer initialization.
  *
@@ -687,7 +275,6 @@ static void timers_init(void)
 
     //Initiate timer
 	app_timer_create(&m_our_char_timer_id, APP_TIMER_MODE_REPEATED, timer_timeout_handler);
-	app_timer_create(&data_dump_id, APP_TIMER_MODE_REPEATED, data_dump_timeout);
 }
 
 
@@ -788,7 +375,6 @@ static void conn_params_init(void)
 */
 static void application_timers_start(void)
 {
-    // OUR_JOB: Step 3.I, Start our timer
 	app_timer_start(m_our_char_timer_id, OUR_CHAR_TIMER_INTERVAL, NULL);
 }
 
@@ -799,7 +385,9 @@ static void application_timers_start(void)
  */
 static void sleep_mode_enter(void)
 {
-    uint32_t err_code = bsp_indication_set(BSP_INDICATE_IDLE);
+    //blockUpdate = true;
+	SEGGER_RTT_WriteString(0,"NRF_INVALID_STATE\n");
+	uint32_t err_code = bsp_indication_set(BSP_INDICATE_IDLE);
     APP_ERROR_CHECK(err_code);
 
     // Prepare wakeup buttons.
@@ -851,12 +439,10 @@ static void on_ble_evt(ble_evt_t * p_ble_evt)
             err_code = bsp_indication_set(BSP_INDICATE_CONNECTED);
             APP_ERROR_CHECK(err_code);
             m_conn_handle = p_ble_evt->evt.gap_evt.conn_handle;
-			//nrf_drv_gpiote_out_clear(19);
             break;
 
         case BLE_GAP_EVT_DISCONNECTED:
             m_conn_handle = BLE_CONN_HANDLE_INVALID;
-			//nrf_drv_gpiote_out_set(19);
             break;
 
         default:
@@ -1138,6 +724,21 @@ void spiInit(int cs, uint8_t* txbuffer, uint8_t* rxbuffer, uint8_t* txbuffread){
 	spi_xfer_done = false;
 	
 }
+
+void initializePin(nrf_drv_gpiote_out_config_t pinConfig, nrf_drv_gpiote_pin_t pin, bool pinStatus){
+	ret_code_t err_code;
+	err_code = nrf_drv_gpiote_out_init(pin,&pinConfig);
+	if(err_code != 0){
+		SEGGER_RTT_printf(0, "error initializing pin %d\n", pin);
+	}
+	if(pinStatus){
+		nrf_drv_gpiote_out_set(pin);
+	}
+	else{
+		nrf_drv_gpiote_out_clear(pin);
+	}
+}
+
 int main(void)
 {   
 	/****************************
@@ -1156,44 +757,25 @@ int main(void)
 		SEGGER_RTT_WriteString(0,"NRF_INVALID_STATE\n");
 	}
  
-	nrf_drv_gpiote_out_config_t cs = {
+	nrf_drv_gpiote_out_config_t outputGPIO = {
 		NRF_GPIOTE_POLARITY_HITOLO,
 		NRF_GPIOTE_INITIAL_VALUE_HIGH,
 		false,
 	};
-	
-	err_code = nrf_drv_gpiote_out_init(CS_ADXL2_PIN,&cs);
-	if(err_code != 0){
-		SEGGER_RTT_WriteString(0, "error initializing adxl2 cs\n");
-	}
-	nrf_drv_gpiote_out_set(CS_ADXL2_PIN);
-	
-	err_code = nrf_drv_gpiote_out_init(CS_ADXL1_PIN,&cs);
-		if(err_code != 0){
-		SEGGER_RTT_WriteString(0, "error initializing adxl1 cs\n");
-	}
-	nrf_drv_gpiote_out_set(CS_ADXL1_PIN);
-	
-	err_code = nrf_drv_gpiote_out_init(CS_FRAM,&cs);
-	if(err_code != 0){
-		SEGGER_RTT_WriteString(0, "error initializing fram cs\n");
-	}
-	nrf_drv_gpiote_out_set(CS_FRAM);
-	
-	err_code = nrf_drv_gpiote_out_init(2,&cs);
-	if(err_code != 0){
-		SEGGER_RTT_WriteString(0, "error initializing bosch address pin\n");
-	}
-	nrf_drv_gpiote_out_set(2);
-	
-	nrf_drv_gpiote_out_init(15,&cs);
-	nrf_drv_gpiote_out_clear(15);
-	nrf_drv_gpiote_out_init(19,&cs);
-	nrf_drv_gpiote_out_set(19);
-	nrf_drv_gpiote_out_init(20,&cs);
-	nrf_drv_gpiote_out_set(20);
-	
-	// initialize interrupt pin lo to hi 
+	initializePin(outputGPIO,CS_ADXL2_PIN_EVAL, true);
+
+	initializePin(outputGPIO,CS_ADXL1_PIN_EVAL, true);
+
+	initializePin(outputGPIO,CS_FRAM_EVAL,true);
+
+	initializePin(outputGPIO,main_bosch_address_pin,true);
+
+	initializePin(outputGPIO,green_led,false);
+
+	initializePin(outputGPIO,red_led,true);
+
+	initializePin(outputGPIO,yellow_led,true);
+
 	nrf_drv_gpiote_in_config_t interrupt = {
 		NRF_GPIOTE_POLARITY_LOTOHI,
 		NRF_GPIO_PIN_PULLDOWN,
@@ -1201,12 +783,11 @@ int main(void)
 		true,
 	};
 	
-	err_code = nrf_drv_gpiote_in_init(6, &interrupt, int_fxn);
+	err_code = nrf_drv_gpiote_in_init(boschIntEval, &interrupt, int_fxn);
 	if(err_code != 0){
-		SEGGER_RTT_WriteString(0,"interrupt pin not initialized");
+		SEGGER_RTT_WriteString(0,"interrupt pin not initialized\n");
 	}
-	nrf_drv_gpiote_in_event_enable(6, true);
-	//Bosch int 
+	nrf_drv_gpiote_in_event_enable(boschIntEval, true);
 	
 	
 	/****************************
@@ -1224,83 +805,26 @@ int main(void)
 *
 **************************************************************************************************/
 	
-	uint8_t initTxBuff[2] = {0x2D,0x00};   //power control register 0x08 is measurement mode
+	uint8_t initTxBuff[2] = {0x2D,0x08};   //power control register 0x08 is measurement mode
 	uint8_t* addrInitTx = &initTxBuff[0];
 	uint8_t initRxBuff[2];
 	uint8_t* addrInitRxBuff = &initRxBuff[0];
 	uint8_t initTxRead[1] = {0xAD};
 	uint8_t* addrInitTxRead = &initTxRead[0];
-	spiInit(CS_ADXL1_PIN, addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 measurement mode 8 = %d\n", initRxBuff[1]);
-	//spiInit(CS_ADXL2_PIN, addrInitTx, addrInitRxBuff, addrInitTxRead);
-	//SEGGER_RTT_printf(0, "ADXL2 measurement mode 8 = %d\n", initRxBuff[1]);
-	/*
-	initTxBuff[0] = 0x1D; initTxBuff[1] = 0x0A;
-	initTxRead[0] = 0x9D;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 shock threshold 10 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 shock threshold 10 = %d\n", initRxBuff[1]);
-	initTxBuff[0] = 0x21; initTxBuff[1] = 0xFF;
-	initTxRead[0] = 0xA1;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 duration read 255 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 duration read 255 = %d\n", initRxBuff[1]);
-	
-	initTxBuff[0] = 0x2F; initTxBuff[1] = 0xBF;
-	initTxRead[0] = 0xAF;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 interrupt map 191 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 interrupt map 191 = %d\n", initRxBuff[1]);
-	
-	initTxBuff[0] = 0x2A; initTxBuff[1] = 0x07;
-	initTxRead[0] = 0xAA;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 shock enabled axes 7 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 shock enabled axes 7 = %d\n", initRxBuff[1]);
-	
-	initTxBuff[0] = 0x2E; initTxBuff[1] = 0x40;
-	initTxRead[0] = 0xAE;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 interrupts enabled 64 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 interrupts enabled 64 = %d\n", initRxBuff[1]);
-	*/
-	/****************************
-	*
-	* fifo stream mode	
-	*
-	****************************/
-	/*initTxBuff[0] = 0x38; initTxBuff[1] = 0x80;
-	initTxRead[0] = 0xB8;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 fifo control register 128 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 fifo control register 128 = %d\n", initRxBuff[1]);
-	*/
-	/****************************
-	*
-	* data rate	
-	*
-	****************************/
-	/*initTxBuff[0] = 0x2C; initTxBuff[1] = 0x0F;
-	initTxRead[0] = 0xAC;
-	spiInit(CS_ADXL1_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL1 data rate 15 = %d\n", initRxBuff[1]);
-	spiInit(CS_ADXL2_PIN,addrInitTx, addrInitRxBuff, addrInitTxRead);
-	SEGGER_RTT_printf(0, "ADXL2 data rate 15 = %d\n", initRxBuff[1]);
-	*/
-    /****************************
-	*
-	*  initialize the fram  
-	*		 enable 1st write
-	*
-	****************************/
-	/*
-	cs_flag = 1; 												// FRAM
+	spiInit(CS_ADXL1_PIN_EVAL, addrInitTx, addrInitRxBuff, addrInitTxRead);
+	SEGGER_RTT_printf(0, "ADXL1 measurement mode 0 = %d\n", initRxBuff[1]);
+	mainADXLid = initRxBuff[1];
+	/*spiInit(CS_ADXL2_PIN, addrInitTx, addrInitRxBuff, addrInitTxRead);
+	SEGGER_RTT_printf(0, "ADXL2 measurement mode 0 = %d\n", initRxBuff[1]);
+	antADXLid = initRxBuff[1];*/
+	/*nrf_drv_gpiote_out_clear(CS_ADXL1_PIN);
+	nrf_drv_spi_transfer(&spi, addrInitTx , 2, NULL, 0);
+	while (!spi_xfer_done)
+    {
+        __WFE();
+    }
+	nrf_drv_gpiote_out_set(CS_ADXL1_PIN);
+	spi_xfer_done = false;*/
 	
 	uint8_t FRAMtx[1] = {0x06};  								//write enable
 	uint8_t* addrFRAMtx = &FRAMtx[0];
@@ -1324,7 +848,7 @@ int main(void)
 	nrf_drv_gpiote_out_set(CS_FRAM);
 	spi_xfer_done = false;
 	
-	nrf_drv_gpiote_out_clear(19);						 //write enable again
+	nrf_drv_gpiote_out_clear(CS_FRAM);						 //write enable again
 	nrf_drv_spi_transfer(&spi, addrFRAMtx,1, NULL,0);
 	while (!spi_xfer_done)
     {
@@ -1349,31 +873,29 @@ int main(void)
 	if (FRAMrx3[1] == 66){
 		SEGGER_RTT_WriteString(0,"FRAM initialized\n");
 	}
-*/
+
 /***********************************************************************************
 *
 *  Initialize i2c (twi)
 *		bosch bno055
 *
 ***********************************************************************************/
-	nrf_delay_ms(500); //on power up the bosch(?) needs this time to initialize
+	nrf_delay_ms(500); //on power up the bosch needs this time to initialize
 	ret_code_t i2cStatus;
 	i2cStatus = twi_master_init();
 	if (i2cStatus != NRF_SUCCESS)
 	{
-		SEGGER_RTT_WriteString(0, "\ni2c init ERROR\n");
+		SEGGER_RTT_WriteString(0, "i2c init ERROR\n");
 	}
 	/****************************
 	*
 	*  normal power
 	*
 	****************************/
-	uint8_t txBuff[2] = {0x3E,0x00};  //Power mode = normal
+	uint8_t txBuff[2] = {0x3E,0x01};  //Power mode = normal
 	uint8_t* addrTx = &txBuff[0];
 	uint8_t rxBuff[1];
-	uint8_t rxBuffAnt[1];
 	uint8_t* addrRx = &rxBuff[0];
-	uint8_t* addRx2 = &rxBuffAnt[0];
 
 	ret_code_t i2cErr;
 	//write
@@ -1382,11 +904,7 @@ int main(void)
 	{
 		SEGGER_RTT_WriteString(0, "i2cError 1\n");
 	}
-	/*i2cErr = nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,2,false);
-	if (i2cErr != NRF_SUCCESS)
-	{
-		SEGGER_RTT_WriteString(0, "i2cError 2\n");
-	}*/
+
 	//read
 	i2cErr = nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
 	if (i2cErr == NRF_ERROR_INTERNAL)
@@ -1398,20 +916,7 @@ int main(void)
 	{
 		SEGGER_RTT_WriteString(0, "i2cError 4\n");
 	}
-	
-	/*i2cErr = nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,false);
-	if (i2cErr != NRF_SUCCESS)
-	{
-		SEGGER_RTT_WriteString(0, "i2cError 5\n");
-	}
-	nrf_drv_twi_rx(&m_twi_master,0x28,addRx2,1);
-	if (i2cErr != NRF_SUCCESS)
-	{
-		SEGGER_RTT_WriteString(0, "i2cError 6\n");
-	}
-*/
-	//SEGGER_RTT_printf(0, "%d\n", rxBuff[0]);
-	//SEGGER_RTT_printf(0, "%d\n", rxBuffAnt[0]);
+
 	/****************************
 	*
 	* change page
@@ -1423,32 +928,29 @@ int main(void)
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	//SEGGER_RTT_printf(0, "01 = %d\n", rxBuff[0]);
-	/*nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,2,false);
-	nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,false);
-	nrf_drv_twi_rx(&m_twi_master,0x28,addrRx,1);*/
-	//SEGGER_RTT_printf(0, "00 = %d\n", rxBuff[0]);
 	
+	
+
 	/*
 	*  Bosch interrupt settings
 	*/
 	txBuff[0] = 0x08;
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"%d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"01 = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x10; //interrupt enable
 	txBuff[1] = 0xC0; // enable no motion int
 	nrf_drv_twi_tx(&m_twi_master, 0x29, addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"10 = %d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"C0 = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x0F; //interrupt mask, value to write is still 0x40 for any motion 
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"0F = %d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"C0 = %d\n", rxBuff[0]);
 	
 	
 	txBuff[0] = 0x11; // any motion threshold
@@ -1456,49 +958,30 @@ int main(void)
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"11 = %d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"12 = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x12; // acc interrupt settings 2 LSB == any motion duration
 	txBuff[1] = 0x1C;
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"12 = %d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"1C = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x16;
-	txBuff[1] = 0x7B; // no motion 10 seconds will trigger interrupt
+	txBuff[1] = 0x1F; // no motion 15 seconds will trigger interrupt
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"16 = %d\n", rxBuff[0]);
+	SEGGER_RTT_printf(0,"0B = %d\n", rxBuff[0]);
 	
+
 	txBuff[0] = 0x15;
 	txBuff[1] = 0x12;
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	SEGGER_RTT_printf(0,"%d\n", rxBuff[0]);
-	
-	
-	/****************************
-	*
-	*  maximize gyro output and scale 
-	*	 sensor must be in config mode (modes controlled by 0x3D) and 
-	*    on page 1 to change sensor configuration 
-	*
-	****************************/
-	/*
-	txBuff[0] = 0x0A;				//gyro config 523 Hz and +/-2000dps
-	txBuff[1] = 0x38;
-	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
-	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
-	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	//SEGGER_RTT_printf(0, "00 = %d\n", rxBuff[0]);
-	nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,2,false);
-	nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,false);
-	nrf_drv_twi_rx(&m_twi_master,0x28,addrRx,1);
-	//SEGGER_RTT_printf(0, "00 = %d\n", rxBuff[0]);
-	*/
+	SEGGER_RTT_printf(0,"12 = %d\n", rxBuff[0]);
+
 	/****************************
 	*
 	*  change back to default page
@@ -1509,12 +992,6 @@ int main(void)
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	//SEGGER_RTT_printf(0, "00 = %d\n", rxBuff[0]);
-	/*nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,2,false);
-	nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,false);
-	nrf_drv_twi_rx(&m_twi_master,0x28,addrRx,1);
-	//SEGGER_RTT_printf(0, "00 = %d\n", rxBuff[0]);
-	*/
 	/****************************
 	*
 	*  init complete, sensor can be read 
@@ -1526,20 +1003,11 @@ int main(void)
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
-	//nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,2,false);
-	//nrf_drv_twi_tx(&m_twi_master,0x28,addrTx,1,false);
-	//nrf_drv_twi_rx(&m_twi_master,0x28,addRx2,1);
-	//SEGGER_RTT_printf(0, "03 = %d\n", rxBuff[0]);
-	//nrf_drv_uart_tx(addrRx, 1);
-	// nrf_drv_uart_xfer_evt_t(uint8_t* p_data, uint8_t numofbytes)
 
 	if (rxBuff[0] == 0x0C){
 		SEGGER_RTT_WriteString(0, "Main BNO055 initialized\n");
 	}
-	/*if (rxBuffAnt[0] == 0x03){
-		SEGGER_RTT_WriteString(0, "Anterior BNO055 initialized\n");
-	}*/
-	//uint32_t err_code;
+
     bool erase_bonds;
 
     // Initialize.
@@ -1564,35 +1032,3 @@ int main(void)
     }
 }
 
-/****************************
-*
-* useful debug statements
-*
-****************************/	
-	/*if (issue == 17)
-	{SEGGER_RTT_WriteString(0,"BUSY");}
-	
-	if(issue == 16)
-	{SEGGER_RTT_WriteString(0,"ADDR");}
-	
-	if(issue == 0)
-	{SEGGER_RTT_WriteString(0,"SUCCESS");}
-	
-	SEGGER_RTT_printf(0, "%d\n", buffRx[0]);   
-	SEGGER_RTT_printf(0, "%d\n", buffRx[1]);   // 35us per sample without printf
-	SEGGER_RTT_printf(0, "%d\n", buffRx[2]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[3]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[4]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[5]);
-	SEGGER_RTT_printf(0, "%d\n\n", buffRx[6]);
-	
-	SEGGER_RTT_printf(0, "%d\n", buffRx[7]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[8]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[9]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[10]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[11]);
-	SEGGER_RTT_printf(0, "%d\n", buffRx[12]);*/
-
-/**
- * @}
- */
