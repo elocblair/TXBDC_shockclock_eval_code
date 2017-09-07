@@ -54,7 +54,7 @@
 #define DEVICE_NAME                      "JohnCougarMellenc"
 #define APP_ADV_INTERVAL                 300                                        /**< The advertising interval 
 																							(in units of 0.625 ms. This value corresponds to 25 ms). */
-#define APP_ADV_TIMEOUT_IN_SECONDS       60000                                        /**< The advertising timeout in units of seconds. */
+#define APP_ADV_TIMEOUT_IN_SECONDS       60                                        /**< The advertising timeout in units of seconds. */
 
 #define APP_TIMER_PRESCALER              0                                          /**< Value of the RTC1 PRESCALER register. */
 #define APP_TIMER_OP_QUEUE_SIZE          4                                          /**< Size of timer operation queues. */
@@ -224,8 +224,6 @@ void int_fxn(){
 		boschIntCheck[0] = 0x3E;
 		boschIntCheck[1] = 0x01;
 		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);
-		//nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],1,false);
-		//nrf_drv_twi_rx(&m_twi_master, 0x29, &boschIntCheck[0],1);
 		SEGGER_RTT_printf(0,"should be 01 %d\n",boschIntCheck[1]);
 	}
 	else if(boschIntCheck[1] >= 64 && boschIntCheck[1] < 128){
@@ -238,10 +236,8 @@ void int_fxn(){
 		nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],1,false);
 		nrf_drv_twi_rx(&m_twi_master, 0x29, &boschIntCheck[0],1);
 		SEGGER_RTT_printf(0,"should be 00 %d\n",boschIntCheck[0]);
+		ble_advertising_start(BLE_ADV_MODE_FAST);
 	}
-	/*boschIntCheck[0] = 0x3F;
-	boschIntCheck[1] = 0x40;
-	nrf_drv_twi_tx(&m_twi_master, 0x29, &boschIntCheck[0],2,false);	*/
 }
 /****************************
 *
@@ -417,7 +413,7 @@ static void on_adv_evt(ble_adv_evt_t ble_adv_evt)
             APP_ERROR_CHECK(err_code);
             break;
         case BLE_ADV_EVT_IDLE:
-            sleep_mode_enter();
+            //sleep_mode_enter();
             break;
         default:
             break;
@@ -805,18 +801,18 @@ int main(void)
 *
 **************************************************************************************************/
 	
-	uint8_t initTxBuff[2] = {0x2D,0x08};   //power control register 0x08 is measurement mode
+	uint8_t initTxBuff[2] = {0x2D,0x00};   //power control register 0x08 is measurement mode
 	uint8_t* addrInitTx = &initTxBuff[0];
 	uint8_t initRxBuff[2];
 	uint8_t* addrInitRxBuff = &initRxBuff[0];
-	uint8_t initTxRead[1] = {0xAD};
+	uint8_t initTxRead[1] = {0x80};
 	uint8_t* addrInitTxRead = &initTxRead[0];
 	spiInit(CS_ADXL1_PIN_EVAL, addrInitTx, addrInitRxBuff, addrInitTxRead);
 	SEGGER_RTT_printf(0, "ADXL1 measurement mode 0 = %d\n", initRxBuff[1]);
 	mainADXLid = initRxBuff[1];
-	/*spiInit(CS_ADXL2_PIN, addrInitTx, addrInitRxBuff, addrInitTxRead);
+	spiInit(CS_ADXL2_PIN, addrInitTx, addrInitRxBuff, addrInitTxRead);
 	SEGGER_RTT_printf(0, "ADXL2 measurement mode 0 = %d\n", initRxBuff[1]);
-	antADXLid = initRxBuff[1];*/
+	antADXLid = initRxBuff[1];
 	/*nrf_drv_gpiote_out_clear(CS_ADXL1_PIN);
 	nrf_drv_spi_transfer(&spi, addrInitTx , 2, NULL, 0);
 	while (!spi_xfer_done)
@@ -834,7 +830,7 @@ int main(void)
     {
        __WFE();
     }
-	nrf_drv_gpiote_out_set(CS_FRAM);
+	nrf_drv_gpiote_out_set(CS_FRAM_EVAL);
 	spi_xfer_done = false;
 	
 	uint8_t FRAMtx2[2] = {0x01,0x42};
@@ -845,7 +841,7 @@ int main(void)
     {
        __WFE();
     }
-	nrf_drv_gpiote_out_set(CS_FRAM);
+	nrf_drv_gpiote_out_set(CS_FRAM_EVAL);
 	spi_xfer_done = false;
 	
 	nrf_drv_gpiote_out_clear(CS_FRAM_EVAL);						 //write enable again
@@ -854,7 +850,7 @@ int main(void)
     {
        __WFE();
     }
-	nrf_drv_gpiote_out_set(CS_FRAM);
+	nrf_drv_gpiote_out_set(CS_FRAM_EVAL);
 	spi_xfer_done = false;
 	
 	uint8_t FRAMtx3[2] = {0x05,0x00};
@@ -968,7 +964,7 @@ int main(void)
 	SEGGER_RTT_printf(0,"1C = %d\n", rxBuff[0]);
 	
 	txBuff[0] = 0x16;
-	txBuff[1] = 0x1F; // no motion 15 seconds will trigger interrupt
+	txBuff[1] = 0x35; // no motion 5 seconds will trigger interrupt
 	nrf_drv_twi_tx(&m_twi_master,0x29,addrTx,2,false);
 	nrf_drv_twi_tx(&m_twi_master, 0x29,addrTx,1,false);
 	nrf_drv_twi_rx(&m_twi_master,0x29,addrRx,1);
